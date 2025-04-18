@@ -5,19 +5,16 @@ I also named the schema "management" because it's clear and helps avoid any conf
 
 
 -- to drop the database if it already exists (for rerunnable code)
-DROP DATABASE IF EXISTS political_campaign_db;
+DROP DATABASE IF EXISTS political_campaign_2025;
 
 -- to create a new database
-CREATE DATABASE political_campaign_db;
-
--- in order to connect to the new database 
-\c political_campaign_db;
+CREATE DATABASE political_campaign_2025;
 
 -- to drop the schema if it exists
-DROP SCHEMA IF EXISTS political_campaign CASCADE;
+DROP SCHEMA IF EXISTS management CASCADE;
 
 -- to create a schema for organizing our tables
-CREATE SCHEMA management;
+CREATE SCHEMA IF NOT EXISTS management;
 
 -- to set search path to use our schema by default
 SET search_path TO management;
@@ -776,20 +773,22 @@ BEGIN
         ALTER COLUMN supervisor_volunteer_full_name SET NOT NULL;
     END IF;
 
-    -- Add UNIQUE constraint for full name if not already exists
+   --instead of unique supervisor name, adding unique employee and volunteer id's
+DO $$
+BEGIN
     IF NOT EXISTS (
         SELECT 1
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.constraint_column_usage ccu 
-            ON tc.constraint_name = ccu.constraint_name
-        WHERE tc.table_schema = 'management'
-          AND tc.table_name = 'supervisor_volunteer'
-          AND tc.constraint_type = 'UNIQUE'
-          AND ccu.column_name = 'supervisor_volunteer_full_name'
+        FROM information_schema.table_constraints
+        WHERE constraint_schema = 'management'
+          AND table_name = 'supervisor_volunteer'
+          AND constraint_type = 'UNIQUE'
+          AND constraint_name = 'unique_emp_vol_id'
     ) THEN
         ALTER TABLE management.supervisor_volunteer
-        ADD CONSTRAINT unique_full_name UNIQUE (supervisor_volunteer_full_name);
+        ADD CONSTRAINT unique_emp_vol_id UNIQUE (employee_id, volunteer_id); 
     END IF;
+END $$;
+
 
     -- Add UNIQUE constraint for email
     IF NOT EXISTS (
@@ -1555,56 +1554,87 @@ WHERE NOT EXISTS (
 
 -- Survey table 
 INSERT INTO management.survey (
-    survey_result_id, 
-    survey_title
+    survey_result_id,
+    survey_title,
+    survey_date
 )
-SELECT sr.survey_result_id, vals.title
+SELECT sr.survey_result_id, vals.title, vals.date
 FROM management.survey_result sr
-CROSS JOIN (
+INNER JOIN (
     VALUES
-        ('Voter Priorities Survey '),
-        ('Voter Satisfaction Survey ')
-) AS vals(title)
-WHERE (
-    (sr.survey_result_date = DATE '2025-02-10' AND vals.title = 'Voter Priorities ')
-    OR 
-    (sr.survey_result_date = DATE '2025-02-20' AND vals.title = 'Voter Satisfaction Survey')
-)
-AND NOT EXISTS (
-    SELECT 1
-    FROM management.survey s
-    WHERE s.survey_title = vals.title
-);
+        ('Voter Priorities Survey', DATE '2025-02-10'),
+        ('Voter Satisfaction Survey', DATE '2025-02-20')
+) AS vals(title, date)
+  ON sr.survey_result_date = vals.date
+ON CONFLICT (survey_title) DO NOTHING;
 
 
 -- Campaign Staff table (depends on employee and campaign)
-INSERT INTO management.campaign_staff (
-    employee_id, 
-    campaign_id, 
-    campaign_staff_role
-)
-SELECT e.employee_id, c.campaign_id, vals.role
+-- Campaign Manager for 'Equality for All'
+INSERT INTO management.campaign_staff (employee_id, campaign_id, campaign_staff_role)
+SELECT e.employee_id, c.campaign_id, 'Campaign Manager'
 FROM management.employee e
-CROSS JOIN management.campaign c
-CROSS JOIN (
-    VALUES
-        ('Campaign Manager'),
-        ('Field Director'),
-        ('Communications Director'),
-        ('Finance Director'),
-        ('Volunteer Coordinator')
-) AS vals(role)
-WHERE (e.employee_position = 'Campaign Manager' AND vals.role = 'Campaign Manager' AND c.campaign_name = 'Equality for All')
-   OR (e.employee_position = 'Field Director' AND vals.role = 'Field Director' AND c.campaign_name = 'Vote Ready 2025')
-   OR (e.employee_position = 'Communications Director' AND vals.role = 'Communications Director' AND c.campaign_name = 'Digital Awareness Campaign')
-   OR (e.employee_position = 'Finance Director' AND vals.role = 'Finance Director' AND c.campaign_name = 'Green Future')
-   OR (e.employee_position = 'Volunteer Coordinator' AND vals.role = 'Volunteer Coordinator' AND c.campaign_name = 'Progress Coalition')
-AND NOT EXISTS (
+INNER JOIN management.campaign c ON c.campaign_name = 'Equality for All'
+WHERE e.employee_position = 'Campaign Manager'
+  AND NOT EXISTS (
     SELECT 1
     FROM management.campaign_staff cs
     WHERE cs.employee_id = e.employee_id
-    AND cs.campaign_id = c.campaign_id
+      AND cs.campaign_id = c.campaign_id
 );
+
+-- Field Director for 'Vote Ready 2025'
+INSERT INTO management.campaign_staff (employee_id, campaign_id, campaign_staff_role)
+SELECT e.employee_id, c.campaign_id, 'Field Director'
+FROM management.employee e
+INNER JOIN management.campaign c ON c.campaign_name = 'Vote Ready 2025'
+WHERE e.employee_position = 'Field Director'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM management.campaign_staff cs
+    WHERE cs.employee_id = e.employee_id
+      AND cs.campaign_id = c.campaign_id
+);
+
+-- Communications Director for 'Digital Awareness Campaign'
+INSERT INTO management.campaign_staff (employee_id, campaign_id, campaign_staff_role)
+SELECT e.employee_id, c.campaign_id, 'Communications Director'
+FROM management.employee e
+INNER JOIN management.campaign c ON c.campaign_name = 'Digital Awareness Campaign'
+WHERE e.employee_position = 'Communications Director'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM management.campaign_staff cs
+    WHERE cs.employee_id = e.employee_id
+      AND cs.campaign_id = c.campaign_id
+);
+
+-- Finance Director for 'Green Future'
+INSERT INTO management.campaign_staff (employee_id, campaign_id, campaign_staff_role)
+SELECT e.employee_id, c.campaign_id, 'Finance Director'
+FROM management.employee e
+INNER JOIN management.campaign c ON c.campaign_name = 'Green Future'
+WHERE e.employee_position = 'Finance Director'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM management.campaign_staff cs
+    WHERE cs.employee_id = e.employee_id
+      AND cs.campaign_id = c.campaign_id
+);
+
+-- Volunteer Coordinator for 'Progress Coalition'
+INSERT INTO management.campaign_staff (employee_id, campaign_id, campaign_staff_role)
+SELECT e.employee_id, c.campaign_id, 'Volunteer Coordinator'
+FROM management.employee e
+INNER JOIN management.campaign c ON c.campaign_name = 'Progress Coalition'
+WHERE e.employee_position = 'Volunteer Coordinator'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM management.campaign_staff cs
+    WHERE cs.employee_id = e.employee_id
+      AND cs.campaign_id = c.campaign_id
+);
+
 
 -- Supervisor Volunteer table (depends on employee and volunteer)
 INSERT INTO management.supervisor_volunteer (
@@ -1623,7 +1653,7 @@ SELECT
     LOWER(LEFT(e.employee_first_name, 1) || e.employee_last_name || v.volunteer_id) || '.supervisor@campaign.org' AS email,
     (100 + e.employee_id)::text || ' Supervisor St, Campaign HQ' AS address
 FROM management.employee e
-CROSS JOIN management.volunteer v
+INNER JOIN management.volunteer v ON TRUE
 WHERE e.employee_position = 'Volunteer Coordinator'
   AND NOT EXISTS (
       SELECT 1
@@ -1661,34 +1691,96 @@ ON CONFLICT DO NOTHING;
 
 
 -- Donation table (depends on donor)
+-- Insert donation from Richard Thompson
 INSERT INTO management.donation (
-    donor_id, 
-    donation_date, 
-    donation_amount, 
-    donation_purpose
+	donor_id,
+	donation_date, 
+	donation_amount,
+	donation_purpose
 )
-SELECT d.donor_id, vals.date, vals.amount, vals.purpose
+SELECT d.donor_id, DATE '2025-02-15', 5000.00, 'General campaign fund'
 FROM management.donor d
-CROSS JOIN (
-    VALUES
-        (DATE '2025-02-15', 5000.00, 'General campaign fund'),
-        (DATE '2025-03-01', 10000.00, 'Media advertising'),
-        (DATE '2025-03-15', 2500.00, 'Community outreach events'),
-        (DATE '2025-04-01', 7500.00, 'Digital marketing'),
-        (DATE '2025-04-15', 15000.00, 'Television ads')
-) AS vals(date, amount, purpose)
-WHERE (d.donor_email = 'rthompson@email.com' AND vals.amount = 5000.00)
-   OR (d.donor_email = 'ecampbell@email.com' AND vals.amount = 10000.00)
-   OR (d.donor_email = 'whughes@email.com' AND vals.amount = 2500.00)
-   OR (d.donor_email = 'jmorgan@email.com' AND vals.amount = 7500.00)
-   OR (d.donor_email = 'cbaker@email.com' AND vals.amount = 15000.00)
-AND NOT EXISTS (
-    SELECT 1
-    FROM management.donation don
-    WHERE don.donor_id = d.donor_id
-    AND don.donation_amount = vals.amount
-    AND don.donation_purpose = vals.purpose
-);
+WHERE d.donor_email = 'rthompson@email.com'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM management.donation don
+      WHERE don.donor_id = d.donor_id
+        AND don.donation_amount = 5000.00
+        AND don.donation_purpose = 'General campaign fund'
+  );
+
+-- Insert donation from Elizabeth Campbell
+INSERT INTO management.donation (
+	donor_id,
+	donation_date, 
+	donation_amount,
+	donation_purpose
+)
+SELECT d.donor_id, DATE '2025-03-01', 10000.00, 'Media advertising'
+FROM management.donor d
+WHERE d.donor_email = 'ecampbell@email.com'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM management.donation don
+      WHERE don.donor_id = d.donor_id
+        AND don.donation_amount = 10000.00
+        AND don.donation_purpose = 'Media advertising'
+  );
+
+-- Insert donation from William Hughes
+INSERT INTO management.donation (
+	donor_id,
+	donation_date, 
+	donation_amount,
+	donation_purpose
+)
+SELECT d.donor_id, DATE '2025-03-15', 2500.00, 'Community outreach events'
+FROM management.donor d
+WHERE d.donor_email = 'whughes@email.com'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM management.donation don
+      WHERE don.donor_id = d.donor_id
+        AND don.donation_amount = 2500.00
+        AND don.donation_purpose = 'Community outreach events'
+  );
+
+-- Insert donation from Jennifer Morgan
+INSERT INTO management.donation (
+	donor_id,
+	donation_date, 
+	donation_amount,
+	donation_purpose
+)
+SELECT d.donor_id, DATE '2025-04-01', 7500.00, 'Digital marketing'
+FROM management.donor d
+WHERE d.donor_email = 'jmorgan@email.com'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM management.donation don
+      WHERE don.donor_id = d.donor_id
+        AND don.donation_amount = 7500.00
+        AND don.donation_purpose = 'Digital marketing'
+  );
+
+-- Insert donation from Christopher Baker
+INSERT INTO management.donation (
+	donor_id,
+	donation_date, 
+	donation_amount,
+	donation_purpose
+)
+SELECT d.donor_id, DATE '2025-04-15', 15000.00, 'Television ads'
+FROM management.donor d
+WHERE d.donor_email = 'cbaker@email.com'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM management.donation don
+      WHERE don.donor_id = d.donor_id
+        AND don.donation_amount = 15000.00
+        AND don.donation_purpose = 'Television ads'
+  );
+
 
 -- Finance table (depends on campaign and donation)
 INSERT INTO management.finance (
