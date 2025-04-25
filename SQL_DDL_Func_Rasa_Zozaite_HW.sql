@@ -3,51 +3,40 @@ Create a view called 'sales_revenue_by_category_qtr' that shows the film categor
 for the current quarter and year. The view should only display categories with at least one sale in the current quarter.
 Note: when the next quarter begins, it will be considered as the current quarter.*/
 
-
-CREATE VIEW sales_revenue_by_category_qtr AS --this creates a view
---creating cte
-WITH film_amount AS ( 
+DROP VIEW IF EXISTS public.sales_revenue_by_category_qtr;
+CREATE OR REPLACE VIEW public.sales_revenue_by_category_qtr AS --this creates a view
+WITH category_sales AS (
     SELECT
-        	i.inventory_id, 
-        	i.film_id,
-        	DATE_PART('year', p.payment_date)		AS sales_year,
-        	DATE_PART('quarter', p.payment_date)	AS sales_quarter,--extracts the quarter
-        	SUM(p.amount) 							AS total_amount --calculates total payment (sales) for that inventory item
-    FROM public.inventory i
-    LEFT	JOIN public.rental r	ON r.inventory_id = i.inventory_id --to ensure all inventory items are included, even if they don't have rentals nan payments
-    LEFT	JOIN public.payment p	ON r.rental_id = p.rental_id
-    WHERE 	DATE_PART('year', p.payment_date)	= DATE_PART('year', CURRENT_DATE) AND --in order to filter records to only include payments made in the current year and quarter
-      	 	DATE_PART('quarter', p.payment_date)= DATE_PART('quarter', CURRENT_DATE)
-    GROUP BY 
-        	i.inventory_id, 
-        	i.film_id,
-        	sales_year,
-        	sales_quarter
+        c.name AS category,
+        DATE_PART('year', p.payment_date) AS sales_year,
+        DATE_PART('quarter', p.payment_date) AS sales_quarter,
+        SUM(p.amount) AS total_sales_revenue
+    FROM payment p
+    INNER JOIN rental r         ON r.rental_id = p.rental_id
+    INNER JOIN inventory i      ON i.inventory_id = r.inventory_id
+    INNER JOIN film f           ON f.film_id = i.film_id
+    INNER JOIN film_category fc ON f.film_id = fc.film_id
+    INNER JOIN category c       ON fc.category_id = c.category_id
+    WHERE 
+        DATE_PART('year', p.payment_date) = DATE_PART('year', CURRENT_DATE) AND
+        DATE_PART('quarter', p.payment_date) = DATE_PART('quarter', CURRENT_DATE)
+    GROUP BY c.name, sales_year, sales_quarter
 )
-	SELECT 
-    	c.name 					AS category,
-    	fa.sales_year,
-    	fa.sales_quarter,
-    	SUM(fa.total_amount)	AS total_sales_revenue
-FROM film_amount fa
-INNER	JOIN public.film f 				ON f.film_id = fa.film_id
-INNER	JOIN public.film_category fc	ON f.film_id = fc.film_id
-INNER	JOIN public.category c			ON fc.category_id = c.category_id
-GROUP BY 
-    	c.name,
-    	fa.sales_year,
-    	fa.sales_quarter
-HAVING SUM(fa.total_amount) > 0 --in order to ensure that only categories with at least one sale are included
-ORDER BY 
-    	total_sales_revenue DESC;
+SELECT *
+FROM category_sales
+WHERE total_sales_revenue > 0
+ORDER BY total_sales_revenue DESC;
+
+
+SELECT * FROM public.sales_revenue_by_category_qtr;
 
 
 /*Task 2. Create a query language functions. 
 Create a query language function called 'get_sales_revenue_by_category_qtr' that accepts one parameter representing 
 the current quarter and year and returns the same result as the 'sales_revenue_by_category_qtr' view.*/
 
-	
-CREATE OR REPLACE FUNCTION get_sales_revenue_by_category_qtr( -- creating function with two parameters
+DROP FUNCTION IF EXISTS public.get_sales_revenue_by_category_qtr;	
+CREATE OR REPLACE FUNCTION public.get_sales_revenue_by_category_qtr( -- creating function with two parameters
 	p_year INT, --the sales year to filter by
     p_quarter INT --the quarte
 )
@@ -94,7 +83,7 @@ ORDER BY
 $$ LANGUAGE SQL; --closes the function and specifies it's written in plain SQL
 
 
-DROP FUNCTION public.get_sales_revenue_by_category_qtr(int4, int4); -- for testing and using I need to debug and frop function
+DROP FUNCTION IF EXISTS public.get_sales_revenue_by_category_qtr(int4, int4); -- for testing and using I need to debug and frop function
 
 SELECT * FROM get_sales_revenue_by_category_qtr(2025,2); -- for testing how function works
 
@@ -114,7 +103,6 @@ select * from core.most_popular_films_by_countries(array['Afghanistan','Brazil',
 -- Drop the function if it already exists. Used a lot while trying to write function. 
 DROP FUNCTION IF EXISTS public.most_popular_films_by_countries(TEXT[]);
 
-
 CREATE OR REPLACE FUNCTION public.most_popular_films_by_countries(
 	countries TEXT[]) --parameter
 RETURNS TABLE ( 
@@ -125,11 +113,27 @@ RETURNS TABLE (
     Length SMALLINT,
     Release_year public."year"
 ) AS $$
+
+DECLARE
+    missing_countries TEXT[];
 BEGIN
-    --checks if the input array is NULL or empty
-    IF countries IS NULL OR array_length(countries, 1) = 0 THEN
-        RAISE EXCEPTION 'Input array of countries cannot be null or empty';
+    --checks if the input array is NULL or unknow
+    IF countries IS NULL OR array_length(countries, 1) IS NULL OR array_length(countries, 1) = 0 THEN
+    RAISE EXCEPTION 'You must provide at least one country.';
+END IF;
+
+--checking if country name is in the database or is written correctly
+
+SELECT ARRAY(
+    SELECT unnest(countries)
+    EXCEPT
+    SELECT c.country FROM country c
+) INTO missing_countries;
+
+    IF array_length(missing_countries, 1) > 0 THEN
+        RAISE EXCEPTION 'The following countries do not exist in the database: %', missing_countries;
     END IF;
+
 
     RETURN QUERY
     WITH film_rentals AS (
@@ -177,15 +181,18 @@ $$ LANGUAGE plpgsql;
 	
 -- to see specific countries
 SELECT * FROM public.most_popular_films_by_countries(ARRAY['Lithuania', 'Latvia', 'Estonia']);
-
+--to see error "You must provide at least one country"
+SELECT * FROM public.most_popular_films_by_countries(ARRAY[]::TEXT[]);
+--to check if country is in the database or written incorrectly
+SELECT * FROM public.most_popular_films_by_countries(ARRAY['Lituana']::TEXT[]);
 -- to see all countries
-
 SELECT * 
 FROM public.most_popular_films_by_countries(
     ARRAY(
         SELECT country FROM public.country
     )
 );
+
 
 /*Task 4. Create procedure language functions
 Create a function that generates a list of movies available in stock based on a partial title match 
@@ -215,7 +222,7 @@ DECLARE
 BEGIN
     -- checks if imput is not empty, if empty then raise an error
     IF partial_title IS NULL OR TRIM(partial_title) = '' THEN
-        RAISE EXCEPTION 'Partial title input cannot be null or empty';
+        RAISE EXCEPTION 'Title input cannot be empty. Please provide part of a film title.';
     END IF;
 
     FOR rec IN --loop construct used to iterate over rows returned by a SQL query
@@ -281,9 +288,18 @@ $$ LANGUAGE plpgsql;
 
 
 
---checking how code works
+--to see if title exists
 SELECT * FROM public.films_in_stock_by_title('love');
-SELECT * FROM public.films_in_stock_by_title('lietuva');
+-- to see "No films in stock matching: lietuva" 
+SELECT * FROM public.films_in_stock_by_title('lietuva'::TEXT);
+--checking with empty value "Title input cannot be empty. Please provide part of a film title."
+SELECT * FROM public.films_in_stock_by_title('');
+-- checking with NULL value "Title input cannot be empty. Please provide part of a film title."
+SELECT * FROM public.films_in_stock_by_title(NULL);
+-- to see if function returns results even if case is different
+SELECT * FROM public.films_in_stock_by_title('LoVe');
+-- when it contains just one letter (if any titles contain 'a')
+SELECT * FROM public.films_in_stock_by_title('a');
 
 
 
@@ -304,7 +320,7 @@ INSERT INTO public.language (name)
 SELECT 'Klingon'
 WHERE NOT EXISTS (
     SELECT language_id 
-    FROM public.language WHERE TRIM(name) = 'Klingon'
+    FROM public.language WHERE TRIM(LOWER(name)) = 'klingon'
 )
 RETURNING language_id, name, last_update;
 
@@ -323,7 +339,7 @@ INSERT INTO public.film (
 SELECT 
     'movie title',    -- title
     EXTRACT(YEAR FROM CURRENT_DATE)::INT,    -- release_year set to current year
-    (SELECT language_id FROM language WHERE TRIM(name) = 'Klingon'), -- language_id
+    (SELECT language_id FROM language WHERE TRIM(LOWER(name)) = 'klingon'), -- language_id
     3,         -- rental_duration
     4.99,      -- rental_rate
     19.99,     -- replacement_cost
@@ -362,7 +378,7 @@ BEGIN
     -- getting language_id for 'Klingon'
     SELECT l.language_id INTO lang_id
     FROM language l
-    WHERE TRIM(l.name) = 'Klingon';
+    WHERE TRIM(LOWER(l.name)) = 'klingon';
 
     -- error if language not found
     IF lang_id IS NULL THEN
@@ -414,14 +430,14 @@ SELECT * FROM public.new_movie('Like a wolf');
 
 -- creating and testing full function
 
-DROP FUNCTION IF EXISTS new_movie2(TEXT,TEXT,public."year", INT,NUMERIC, NUMERIC,TIMESTAMPTZ); -- for testing reasons when I when  
+DROP FUNCTION IF EXISTS new_movie(INT, TEXT,TEXT,public."year", INT,NUMERIC, NUMERIC,TIMESTAMPTZ); -- for testing reasons when I when  
 
 
 /* Creating function with more than one parameter. I decided to try include more parameters because 
 if I have a default values and I need to insert many movies, I only need to provide the movie_title and everything else will use default parameters unless overridden so less writing
 and it is easier to insert different values via SELECT * FROM public.new_movie('movie_title')*/
 
-CREATE OR REPLACE FUNCTION new_movie2(
+CREATE OR REPLACE FUNCTION new_movie(
 	p_title TEXT, --p_title, p_language, etc. are input parameters and prefixed with p_ for clarity
 	p_language TEXT DEFAULT 'Klingon',
 	p_release_year public."year" DEFAULT EXTRACT(YEAR FROM CURRENT_DATE)::public."year",
@@ -431,7 +447,8 @@ CREATE OR REPLACE FUNCTION new_movie2(
 	p_last_update TIMESTAMPTZ DEFAULT NOW()
 )
 -- --This defines the structure of the returned row, using out_ prefixes to avoid ambiguity and will return a table-like result, with these exact columns and data types
-RETURNS TABLE ( 
+RETURNS TABLE (
+	out_film_id INT,
 	out_title TEXT,
 	out_release_year public."year",
 	out_language_id INT2,
@@ -443,71 +460,107 @@ RETURNS TABLE (
 DECLARE ----defining variable  so that I don't have to write SELECT language_id FROM language WHERE TRIM(name) = 'Klingon' every time
 lang_id INT2; -- variable name and is used to store the matched language’s ID
 BEGIN
---checking if a movie with the same title already exists. If it does, throws an exception to prevent duplicates
-IF EXISTS (SELECT title FROM film WHERE title = p_title) THEN
-  RAISE EXCEPTION 'Movie "%" already exists in film table.', p_title;
+--checking if a movie with the same title and the same year already exists. If it does, throws an exception to prevent duplicates
+IF EXISTS (
+  SELECT 1
+  FROM film
+  WHERE title = p_title
+    AND release_year = p_release_year
+) THEN
+  RAISE EXCEPTION 'Movie "%" released in % already exists in film table.', p_title, p_release_year;
 END IF;
+
 
 --Look up the language_id
 SELECT language_id INTO lang_id
 FROM language
-WHERE TRIM(name) = TRIM(p_language);
+WHERE TRIM(LOWER(name)) = TRIM(LOWER(p_language));
 
 -- checking if the language exists at all
 IF lang_id IS NULL THEN
-  RAISE EXCEPTION 'Language "%" not found in language table.', p_language;
+	RAISE NOTICE 'Language "%" not found, default language set to Klingon.', p_language;
+	SELECT language_id INTO lang_id
+    FROM language
+    WHERE TRIM(LOWER(name)) = 'klingon';
 END IF;
 
-RETURN QUERY
-INSERT INTO film (
-  title,
-  release_year,
-  language_id,
-  rental_duration,
-  rental_rate,
-  replacement_cost,
-  last_update
-)
---SELECT is pulling values from function parameters and a variable to insert into the table.
-SELECT --
-  p_title,
-  p_release_year,
-  lang_id,
-  p_rental_duration,
-  p_rental_rate,
-  p_replacement_cost,
-  p_last_update
-WHERE NOT EXISTS (
-  SELECT film_id
-  FROM film
-  WHERE title = p_title
-)
-RETURNING
-  title 			AS out_title,
-  release_year		AS out_release_year,
-  language_id		AS out_language_id,
-  rental_duration	AS out_rental_duration,
-  rental_rate 		AS out_rental_rate,
-  replacement_cost	AS out_replacement_cost,
-  last_update 		AS out_last_update;
+-- film_id sequence
+PERFORM setval(
+  pg_get_serial_sequence('film', 'film_id'),
+  (SELECT COALESCE(MAX(film_id), 0) FROM film),
+  true
+);
+
+BEGIN
+        RETURN QUERY
+        INSERT INTO film (
+            title,
+            release_year,
+            language_id,
+            rental_duration,
+            rental_rate,
+            replacement_cost,
+            last_update
+        )
+        VALUES (
+            p_title,
+            p_release_year,
+            lang_id,
+            p_rental_duration,
+            p_rental_rate,
+            p_replacement_cost,
+            p_last_update
+        )
+        RETURNING
+            film_id           AS out_film_id,
+            title             AS out_title,
+            release_year      AS out_release_year,
+            language_id       AS out_language_id,
+            rental_duration   AS out_rental_duration,
+            rental_rate       AS out_rental_rate,
+            replacement_cost  AS out_replacement_cost,
+            last_update       AS out_last_update;
+
+    EXCEPTION
+        WHEN unique_violation THEN
+            RAISE EXCEPTION 'Insert failed: Duplicate film_id detected in film table.';
+    END;
+
 END;
 $$ LANGUAGE plpgsql;
 
 
 
--- checking if code works as expected
-SELECT * FROM public.new_movie2('Catch me');
-SELECT * FROM public.new_movie2(
-    p_title := 'Vacations in the moon',
+-- checking if code works as expected to prevent duplicates 
+SELECT * FROM public.new_movie('Catch me');
+SELECT * FROM public.new_movie(
+    p_title := 'Catch me',
+    p_release_year := 2020
+);
+--adding new movie inserting different release year, rental rate etc.
+SELECT * FROM public.new_movie(  
+	p_title := 'Vacations in the sun',
     p_release_year := 2011,
     p_rental_duration := 7,
     p_rental_rate := 6.99,
-    p_replacement_cost := 24.99
+    p_replacement_cost := 25.99
 ); 
+--when language is not in the database raise notice and set to default
+SELECT * FROM public.new_movie(
+    p_title := 'Lost in The Woods',
+    p_language := 'Martian'
+);
+--inserting title with existing language
+SELECT * FROM public.new_movie(
+    p_title := 'City Lights',
+    p_language := 'English'
+);
 
 
 
 
 
 
-  
+SELECT setval('film_film_id_seq', (SELECT MAX(film_id) FROM film), true);
+
+
